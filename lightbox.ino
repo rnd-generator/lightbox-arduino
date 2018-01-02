@@ -42,6 +42,7 @@ byte blueArrayTarget[LED_COUNT ];
 
 //time before switch off
 long timeToSwitchOff = 0;
+long timeFromSwithcOffStart = 0;
 bool switchedOff = false;
 
 void setup() {
@@ -71,7 +72,7 @@ void setup() {
 	}
 
 }
-
+//todo: add fade to switch off
 void loop() {
 	long startTime = millis();
 	//try to read data from BT
@@ -85,7 +86,7 @@ void loop() {
 			break;
 		case 'r':
 			BTserial.read();
-			reset(BTserial.parseInt());
+			reset();
 			mode = tempMode;
 			switchedOff = false;
 			timeToSwitchOff = 0;
@@ -122,11 +123,27 @@ void loop() {
 				byte red = BTserial.parseInt();
 				byte green = BTserial.parseInt();
 				byte blue = BTserial.parseInt();
-				for (int i = startingLed; i < startingLed + ledCount ; i++) {
-					EEPROM[shift + 1 + i * 4] = alpha;
-					EEPROM[shift + 2 + i * 4] = red;
-					EEPROM[shift + 3 + i * 4] = green;
-					EEPROM[shift + 4 + i * 4] = blue;
+				if (startingLed + ledCount > LED_COUNT) {
+					for (int i = startingLed; i < LED_COUNT ; i++) {
+						EEPROM[shift + 1 + i * 4] = alpha;
+						EEPROM[shift + 2 + i * 4] = red;
+						EEPROM[shift + 3 + i * 4] = green;
+						EEPROM[shift + 4 + i * 4] = blue;
+					}
+					for (int i = 0; i < startingLed + ledCount - LED_COUNT ;
+							i++) {
+						EEPROM[shift + 1 + i * 4] = alpha;
+						EEPROM[shift + 2 + i * 4] = red;
+						EEPROM[shift + 3 + i * 4] = green;
+						EEPROM[shift + 4 + i * 4] = blue;
+					}
+				} else {
+					for (int i = startingLed; i < startingLed + ledCount; i++) {
+						EEPROM[shift + 1 + i * 4] = alpha;
+						EEPROM[shift + 2 + i * 4] = red;
+						EEPROM[shift + 3 + i * 4] = green;
+						EEPROM[shift + 4 + i * 4] = blue;
+					}
 				}
 
 				BTserial.read();
@@ -163,7 +180,6 @@ void loop() {
 				byte green2 = BTserial.parseInt();
 				byte blue2 = BTserial.parseInt();
 				byte steps = (LED_COUNT - gradiendLedCount * 2) / 2;
-				//don't work for 0!!!! steps
 				for (int i = 0; i <= steps + 1; i++) {
 
 					byte nextLedIndex = gradientStartLed + gradiendLedCount + i
@@ -237,10 +253,14 @@ void loop() {
 				}
 				break;
 			}
-			//reset sleep mode
 		case 'e':
 			switchedOff = false;
 			timeToSwitchOff = 0;
+			{
+				byte brightness = BTserial.parseInt();
+				strip.setBrightness(brightness);
+				EEPROM[490] = brightness;
+			}
 			if (mode == 'm') {
 				loadStripeState();
 			}
@@ -249,10 +269,11 @@ void loop() {
 				loadGradientState();
 			}
 			break;
-			//switch off mode
+			//switch off mode + add fade somehow
 		case 'w':
 			BTserial.read();
 			timeToSwitchOff = BTserial.parseInt();
+			timeFromSwithcOffStart = 0;
 			break;
 		default:
 			break;
@@ -274,11 +295,21 @@ void loop() {
 			break;
 		}
 	}
-//	delay(50);
 	long executionTime = millis() - startTime;
 	if (timeToSwitchOff > 0) {
-		timeToSwitchOff -= executionTime;
+
+		timeFromSwithcOffStart += executionTime;
+		float persentage = timeFromSwithcOffStart
+				/ (float) (timeToSwitchOff - executionTime + timeFromSwithcOffStart);
+		if (persentage > 0.05) {
+			timeFromSwithcOffStart = 0;
+			strip.setBrightness(
+					(uint8_t) (strip.getBrightness() * (1 - persentage)));
+			strip.show();
+		}
+		timeToSwitchOff -= (millis() - startTime);
 		if (timeToSwitchOff <= 0) {
+			timeToSwitchOff = -1;
 			switchedOff = true;
 			for (int i = 0; i < LED_COUNT ; i++) {
 				strip.setPixelColor(i, strip.Color(0, 0, 0));
@@ -319,24 +350,13 @@ void loadGradientState() {
 	}
 }
 
-void reset(byte newBrigthness) {
+void reset() {
 	EEPROM[0] = 'r';
 	for (uint16_t i = 1; i < EEPROM.length(); i++) {
 		EEPROM[i] = 0;
 	}
-	EEPROM[490] = newBrigthness;
-    strip.setBrightness(newBrigthness);
-	for (int i = 0; i < LED_COUNT ; i++) {
-		alphaArrayStart[i] = 0;
-		redArrayStart[i] = 0;
-		greenArrayStart[i] = 0;
-		blueArrayStart[i] = 0;
-		alphaArrayTarget[i] = 0;
-		redArrayTarget[i] = 0;
-		greenArrayTarget[i] = 0;
-		blueArrayTarget[i] = 0;
-	}
-
+	EEPROM[490] = 255;
+	strip.setBrightness(255);
 }
 
 void status() {
@@ -395,14 +415,14 @@ int gradient(int gradientStep) {
 			int diffR = 0;
 			int diffG = 0;
 			int diffB = 0;
-			diffA = (alphaArrayTarget[i] - alphaArrayStart[i]) * gradientStep
-					/ gradientStepCount;
-			diffR = (redArrayTarget[i] - redArrayStart[i]) * gradientStep
-					/ gradientStepCount;
-			diffG = (greenArrayTarget[i] - greenArrayStart[i]) * gradientStep
-					/ gradientStepCount;
-			diffB = (blueArrayTarget[i] - blueArrayStart[i]) * gradientStep
-					/ gradientStepCount;
+			diffA = ((long) (alphaArrayTarget[i] - alphaArrayStart[i]))
+					* gradientStep / gradientStepCount;
+			diffR = ((long) (redArrayTarget[i] - redArrayStart[i]))
+					* gradientStep / gradientStepCount;
+			diffG = ((long) (greenArrayTarget[i] - greenArrayStart[i]))
+					* gradientStep / gradientStepCount;
+			diffB = ((long) (blueArrayTarget[i] - blueArrayStart[i]))
+					* gradientStep / gradientStepCount;
 
 			float ratio = (float) (alphaArrayStart[i] + diffA) / 255.0;
 			uint32_t color = strip.Color(
